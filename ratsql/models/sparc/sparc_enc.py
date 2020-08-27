@@ -8,6 +8,7 @@ import numpy as np
 import torch
 from transformers import BertModel, BertTokenizer
 
+from ratsql.models.modules.encoder import Encoder
 from ratsql.models import abstract_preproc
 from ratsql.models.sparc import sparc_enc_modules
 from ratsql.models.sparc.sparc_match_utils import (
@@ -358,24 +359,39 @@ class SparcEncoderBert(torch.nn.Module):
             self,
             device,
             preproc,
+            encode_size,
             update_config={},
             inputembedding_config={},
+            dropout=0.1,
+            encoder_num_layers=1,
             bert_token_type=False,
             bert_version="bert-base-uncased",
             summarize_header="first",
             use_column_type=True,
+            use_discourse_level_lstm=True,
+            use_utterance_attention=True,
             include_in_memory=('question', 'column', 'table')):
         super().__init__()
         self._device = device
+        self.dropout = dropout
         self.preproc = preproc          #预处理
         self.bert_token_type = bert_token_type  #True
         self.base_enc_hidden_size = 1024 if bert_version == "bert-large-uncased-whole-word-masking" else 768
 
         assert summarize_header in ["first", "avg"]
         self.summarize_header = summarize_header                #avg
-        self.enc_hidden_size = self.base_enc_hidden_size        #等同bert_size
+        self.enc_hidden_size = encode_size
+        self.use_discourse_level_lstm = use_discourse_level_lstm
         self.use_column_type = use_column_type                  #False
+        self.use_utterance_attention = use_utterance_attention
+        self.num_utterances_to_keep = inputembedding_config["num_utterance_keep"]
 
+        if self.use_discourse_level_lstm:
+            self.utterance_encoder = Encoder(encoder_num_layers, self.base_enc_hidden_size + self.enc_hidden_size/2, self.enc_hidden_size)
+        else:
+            self.utterance_encoder = Encoder(encoder_num_layers, self.base_enc_hidden_size, self.enc_hidden_size)
+        self.schema_encoder = Encoder(encoder_num_layers, self.base_enc_hidden_size, self.enc_hidden_size)
+        self.table_encoder = Encoder(encoder_num_layers, self.base_enc_hidden_size, self.enc_hidden_size)
         self.include_in_memory = set(include_in_memory)         #('question', 'column', 'table')
         update_modules = {
             'relational_transformer':
@@ -405,7 +421,7 @@ class SparcEncoderBert(torch.nn.Module):
         self.bert_model.resize_token_embeddings(len(self.tokenizer))  # several tokens added
                                                                     ##reshape transformers vocab size
 
-    def forward(self, desc, pre_enc):       #一个interaction_list
+    def forward(self, desc, pre_enc, discourse_state):       #一个interaction_list
         #print(desc["index"])
         #print(desc['question'])
         #print(desc["question_boundary"])
@@ -429,22 +445,20 @@ class SparcEncoderBert(torch.nn.Module):
                 np.cumsum([q_b] + [len(token_list) for token_list in cols[:-1]]).tolist()  #得到各个column的index，不包含sep
             table_indexes = \
                 np.cumsum([col_b] + [len(token_list) for token_list in tabs[:-1]]).tolist() #得到各个table的index，不包含sep
-            if self.summarize_header == "avg":
-                column_indexes_2 = \
-                    np.cumsum([q_b - 2] + [len(token_list) for token_list in cols]).tolist()[1:] #得到各个column的index，包含sep
-                table_indexes_2 = \
-                    np.cumsum([col_b - 2] + [len(token_list) for token_list in tabs]).tolist()[1:] #得到各个table的index，包含sep
+            column_indexes_2 = \
+                np.cumsum([q_b - 1] + [len(token_list) for token_list in cols]).tolist()[1:] #得到各个column的index，包含sep
+            table_indexes_2 = \
+                np.cumsum([col_b - 1] + [len(token_list) for token_list in tabs]).tolist()[1:] #得到各个table的index，包含sep
 
             indexed_token_list = self.tokenizer.convert_tokens_to_ids(token_list)  #用bert将token list 转化为bert token id
             question_rep_ids = torch.LongTensor(question_indexes).to(self._device)
-            column_rep_ids = torch.LongTensor(column_indexes).to(self._device)
-            table_rep_ids = torch.LongTensor(table_indexes).to(self._device)
-            if self.summarize_header == "avg":
-                assert (all(i2 >= i1 for i1, i2 in zip(column_indexes, column_indexes_2)))
-                column_rep_ids_2 = torch.LongTensor(column_indexes_2).to(self._device)
-                assert (all(i2 >= i1 for i1, i2 in zip(table_indexes, table_indexes_2)))
-                table_rep_ids_2 = torch.LongTensor(table_indexes_2).to(self._device)
-
+            # column_rep_ids = torch.LongTensor(column_indexes).to(self._device)
+            # table_rep_ids = torch.LongTensor(table_indexes).to(self._device)
+            # if self.summarize_header == "avg":
+            assert (all(i2 > i1 for i1, i2 in zip(column_indexes, column_indexes_2)))
+            #     column_rep_ids_2 = torch.LongTensor(column_indexes_2).to(self._device)
+            assert (all(i2 > i1 for i1, i2 in zip(table_indexes, table_indexes_2)))
+            #     table_rep_ids_2 = torch.LongTensor(table_indexes_2).to(self._device)
             padded_token_list, att_mask_list, tok_type_list = self.sequence_for_bert(indexed_token_list)
             token_tensor = torch.LongTensor(padded_token_list).to(self._device)
             att_mask_tensor = torch.LongTensor(att_mask_list).to(self._device)
@@ -455,15 +469,29 @@ class SparcEncoderBert(torch.nn.Module):
                 bert_output = self.bert_model(token_tensor, attention_mask=att_mask_tensor)[0]
             enc_output = bert_output[0]
 
-            q_enc = enc_output[question_rep_ids]
-            col_enc = enc_output[column_rep_ids]
-            tab_enc = enc_output[table_rep_ids]
-            if self.summarize_header == "avg":
-                col_enc_2 = enc_output[column_rep_ids_2]
-                tab_enc_2 = enc_output[table_rep_ids_2]
-                col_enc = (col_enc + col_enc_2) / 2.0  # avg of first and last token
-                tab_enc = (tab_enc + tab_enc_2) / 2.0  # avg of first and last token
+            utterance_enc = enc_output[question_rep_ids]
+            if self.use_discourse_level_lstm:
+                utterance_token_embedder = lambda x: torch.cat([x, discourse_state], dim=0)
+            else:
+                utterance_token_embedder = lambda x: x
+            final_utterance_state, utterance_states = self.utterance_encoder(utterance_enc, utterance_token_embedder, dropout_amount=self.dropout)
+            q_enc = torch.stack(utterance_states, dim=0)
+
+            col_enc = []
+            for start_index, end_index in zip(column_indexes, column_indexes_2):
+                col_token_state = enc_output[start_index : end_index]
+                final_schema_state_one, schema_states_one = self.schema_encoder(col_token_state, lambda x: x, dropout_amount=self.dropout)
+                col_enc.append(final_schema_state_one[1][-1])
+            col_enc = torch.stack(col_enc, dim=0)
+
+            tab_enc = []
+            for start_index, end_index in zip(table_indexes, table_indexes_2):
+                table_token_state = enc_output[start_index : end_index]
+                final_schema_state_one, schema_states_one = self.table_encoder(table_token_state, lambda x:x, dropout_amount=self.dropout)
+                tab_enc.append(final_schema_state_one[1][-1])
+            tab_enc = torch.stack(tab_enc, dim=0)
         else:
+            exit("seq too long! seq > 512")
             print(len(token_list))
             print(desc["schema"].db_id)
             print(desc["raw_question"])
@@ -498,7 +526,7 @@ class SparcEncoderBert(torch.nn.Module):
             memory.append(t_enc_new_item)
         memory = torch.cat(memory, dim=1)
 
-        return input_enc, SparcEncoderState(
+        return final_utterance_state, q_enc, SparcEncoderState(
             state=None,
             memory=memory,   # [1, enc_length, 768]
             question_memory=input_enc_new_item,  # [1, question_length, 768]

@@ -43,8 +43,8 @@ class TrainTreeTraversal(TreeTraversal):
                     token,
                     outer.desc_enc)
 
-    def __init__(self, model, desc_enc, debug=False):
-        super().__init__(model, desc_enc)
+    def __init__(self, model, desc_enc, recurrent_state_init, debug=False):
+        super().__init__(model, desc_enc, recurrent_state_init)
 
         # if model is None:
         #    return

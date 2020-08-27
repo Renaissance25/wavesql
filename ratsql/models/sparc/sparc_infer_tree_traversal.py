@@ -48,8 +48,8 @@ class InferenceTreeTraversal(TreeTraversal):
         'bool': True,
     }
 
-    def __init__(self, model, desc_enc, example=None):
-        super().__init__(model, desc_enc)
+    def __init__(self, model, desc_enc, recurrent_state_init, example=None):
+        super().__init__(model, desc_enc, recurrent_state_init)
         self.example = example
         self.actions = pyrsistent.pvector()
 

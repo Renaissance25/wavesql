@@ -9,9 +9,6 @@ function(args) _base(output_from=_output_from, data_path=args.data_path) + {
     local bert_lr_s = '%0.1e' % args.bert_lr,
     local end_lr_s = if args.end_lr == 0 then '0e0' else '%0.1e' % args.end_lr,
 
-    local base_bert_enc_size = if args.bert_version == "bert-large-uncased-whole-word-masking" then 1024 else 768,
-    local enc_size =  base_bert_enc_size,
-
     model_name: 'bs=%(bs)d,lr=%(lr)s,bert_lr=%(bert_lr)s,end_lr=%(end_lr)s,att=%(att)d' % (args + {
         lr: lr_s,
         bert_lr: bert_lr_s,
@@ -34,9 +31,12 @@ function(args) _base(output_from=_output_from, data_path=args.data_path) + {
                 cv_link: args.cv_link,
             },
             summarize_header: args.summarize_header,
+            encode_size: args.encode_size,
             use_column_type: args.use_column_type,
             bert_version: args.bert_version,
             bert_token_type: args.bert_token_type,
+            use_discourse_level_lstm: args.use_discourse_level_lstm,
+            use_utterance_attention: args.use_utterance_attention,
             top_k_learnable:: null,
             word_emb_size:: null,
         },
@@ -71,7 +71,7 @@ function(args) _base(output_from=_output_from, data_path=args.data_path) + {
             name: 'sparc',
             dropout: 0.20687225956012834,
             desc_attn: 'mha',
-            enc_recurrent_size: enc_size,
+            enc_recurrent_size: args.encode_size,
             recurrent_size : args.decoder_hidden_size,
             loss_type: 'softmax',
             use_align_mat: args.use_align_mat,

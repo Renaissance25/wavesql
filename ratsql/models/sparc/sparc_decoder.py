@@ -541,18 +541,18 @@ class NL2CodeDecoder(torch.nn.Module):
 
         return all_rules, rules_mask
 
-    def compute_loss(self, enc_input, example, desc_enc, debug):
+    def compute_loss(self, enc_input, example, desc_enc, final_utterance_state, debug):
         if not (self.enumerate_order and self.training):
-            mle_loss = self.compute_mle_loss(enc_input, example, desc_enc, debug)
+            mle_loss = self.compute_mle_loss(enc_input, example, desc_enc, final_utterance_state, debug)
         else:
-            mle_loss = self.compute_loss_from_all_ordering(enc_input, example, desc_enc, debug)
+            mle_loss = self.compute_loss_from_all_ordering(enc_input, example, desc_enc, final_utterance_state, debug)
 
         if self.use_align_loss:
             align_loss = self.compute_align_loss(desc_enc, example)
             return mle_loss + align_loss
         return mle_loss
 
-    def compute_loss_from_all_ordering(self, enc_input, example, desc_enc, debug):
+    def compute_loss_from_all_ordering(self, enc_input, example, desc_enc, final_utterance_state, debug):
         def get_permutations(node):
             def traverse_tree(node):
                 nonlocal permutations
@@ -599,9 +599,9 @@ class NL2CodeDecoder(torch.nn.Module):
         loss_v = torch.stack(loss_list, 0)
         return torch.logsumexp(loss_v, 0)
 
-    def compute_mle_loss(self, enc_input, example, desc_enc, debug=False):
+    def compute_mle_loss(self, enc_input, example, desc_enc, final_utterance_state, debug=False):
         #                      encode_input, decode_input, encode_state (single batch)
-        traversal = TrainTreeTraversal(self, desc_enc, debug)
+        traversal = TrainTreeTraversal(self, desc_enc, final_utterance_state, debug)
         traversal.step(None)
         queue = [
             TreeState(
@@ -708,8 +708,8 @@ class NL2CodeDecoder(torch.nn.Module):
         else:
             return loss
 
-    def begin_inference(self, desc_enc, example):
-        traversal = InferenceTreeTraversal(self, desc_enc, example)
+    def begin_inference(self, desc_enc, final_utterance_state, example):
+        traversal = InferenceTreeTraversal(self, desc_enc, final_utterance_state, example)
         choices = traversal.step(None)
         return traversal, choices
 

@@ -52,7 +52,7 @@ class TreeTraversal:
         POINTER_APPLY = 8
         NODE_FINISHED = 9
 
-    def __init__(self, model, desc_enc):
+    def __init__(self, model, desc_enc, recurrent_state_init):
         if model is None:
             return
 
@@ -60,9 +60,7 @@ class TreeTraversal:
         self.desc_enc = desc_enc
 
         model.state_update.set_dropout_masks(batch_size=1)
-        self.recurrent_state = sparc_decoder.lstm_init(         #lstm的state
-            model._device, None, self.model.recurrent_size, 1
-        )
+        self.recurrent_state = recurrent_state_init
         self.prev_action_emb = model.zero_rule_emb        # torch [1, 128]
 
         root_type = model.preproc.grammar.root_type         # "sql"
@@ -85,7 +83,7 @@ class TreeTraversal:
         self.update_prev_action_emb = TreeTraversal._update_prev_action_emb_apply_rule
 
     def clone(self):
-        other = self.__class__(None, None)
+        other = self.__class__(None, None, None)
         other.model = self.model
         other.desc_enc = self.desc_enc
         other.recurrent_state = self.recurrent_state

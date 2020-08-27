@@ -43,6 +43,7 @@ function(output_from, data_path='data/sparc/') {
             question_encoder: ['emb', 'bilstm'],
             column_encoder: ['emb', 'bilstm-summarize'],
             table_encoder: ['emb', 'bilstm-summarize'],
+            encoder_num_layers: 1,
             update_config:  {
                 name: 'relational_transformer',
                 num_layers: 4,
@@ -90,7 +91,7 @@ function(output_from, data_path='data/sparc/') {
         batch_size: 1,
         eval_batch_size: 1,
 
-        keep_every_n: 1000,
+        keep_every_n: 250,
         eval_every_n: 100,
         save_every_n: 100,
         report_every_n: 10,

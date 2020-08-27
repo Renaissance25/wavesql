@@ -15,11 +15,11 @@ class Hypothesis4Filtering(Hypothesis):
     key_column_history = attr.ib(factory=list)
 
 
-def beam_search_with_heuristics(model, pre_encode, orig_item, preproc_item, beam_size, max_steps, from_cond=True):
+def beam_search_with_heuristics(model, utterance_index, orig_item, preproc_item, beam_size, max_steps, from_cond=True):
     """
     Find the valid FROM clasue with beam search
     """
-    q_encode, (inference_state, next_choices) = model.begin_inference(orig_item, preproc_item, pre_encode)
+    (inference_state, next_choices) = model.begin_inference(orig_item, preproc_item, utterance_index)
     beam = [Hypothesis4Filtering(inference_state, next_choices)]
 
     cached_finished_seqs = []  # cache filtered trajectories
@@ -188,9 +188,9 @@ def beam_search_with_heuristics(model, pre_encode, orig_item, preproc_item, beam
                 hyp.column_history = []
                 hyp.key_column_history = []
         elif cached_finished_seqs:
-            return q_encode, cached_finished_seqs[:beam_size]
+            return cached_finished_seqs[:beam_size]
         else:
-            return q_encode, unfiltered_finished[:beam_size]
+            return unfiltered_finished[:beam_size]
 
 
 # merge sorted beam

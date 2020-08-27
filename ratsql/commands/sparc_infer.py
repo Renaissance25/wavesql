@@ -108,7 +108,6 @@ class Inferer:
 
     def _infer_one(self, model, orig_interaction, preproc_interaction, beam_size, output_history=False, use_heuristic=True):
         interaction_decode = []
-        pre_enc = torch.FloatTensor(0).to(self.device)
         for i, preproc_item in enumerate(preproc_interaction[0]):
             data_item = SQLItem(
                 question=orig_interaction.utterances[i],
@@ -118,15 +117,13 @@ class Inferer:
                 orig_schema=orig_interaction.orig_schema)
             if use_heuristic:  #true
                 # TODO: from_cond should be true from non-bert model
-                q_encode, beams = sparc_beam_search.beam_search_with_heuristics( #这个heuristics是什么？？？
-                    model, pre_enc, data_item, preproc_item, beam_size=beam_size, max_steps=1000, from_cond=False)
+                beams = sparc_beam_search.beam_search_with_heuristics( #这个heuristics是什么？？？
+                    model, i, data_item, preproc_item, beam_size=beam_size, max_steps=1000, from_cond=False)
             else:
                 beams = beam_search.beam_search(
                     model, data_item, preproc_item, beam_size=beam_size, max_steps=1000)
 
-            pre_enc = torch.cat([pre_enc, q_encode], 0)
             decoded = []
-
             for beam in beams:
                 model_output, inferred_code = beam.inference_state.finalize()
                 decoded.append({
