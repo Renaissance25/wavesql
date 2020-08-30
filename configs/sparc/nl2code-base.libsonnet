@@ -91,7 +91,7 @@ function(output_from, data_path='data/sparc/') {
         batch_size: 1,
         eval_batch_size: 1,
 
-        keep_every_n: 250,
+        keep_every_n: 500,
         eval_every_n: 100,
         save_every_n: 100,
         report_every_n: 10,

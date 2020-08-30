@@ -287,7 +287,7 @@ class BiLSTM(torch.nn.Module):
 
 
 class RelationalTransformerUpdate(torch.nn.Module):
-    def __init__(self, device, num_layers, num_heads, hidden_size,  # 8, 8, 768
+    def __init__(self, device, num_layers, num_heads, hidden_size, num_utterance_keep, # 8, 8, 768
                  ff_size=None,
                  dropout=0.1,
                  merge_types=False,
@@ -312,6 +312,7 @@ class RelationalTransformerUpdate(torch.nn.Module):
         super().__init__()
         self._device = device
         self.num_heads = num_heads
+        self.num_utterance_keep = num_utterance_keep
 
         self.qq_max_dist = qq_max_dist
         # self.qc_token_match = qc_token_match
@@ -335,21 +336,42 @@ class RelationalTransformerUpdate(torch.nn.Module):
 
         def add_rel_dist(name, max_dist):
             for i in range(-max_dist, max_dist + 1):
-                add_relation((name, i))
+                if isinstance(name, tuple):
+                    add_relation(name + (i,))
+                else:
+                    add_relation((name, i))
 
-        add_rel_dist('qq_dist', qq_max_dist)
+        for i, j in itertools.product(range(self.num_utterance_keep), repeat=2):
+            if i != j:
+                add_relation(("dqq_dist", i, j))
+            else:
+                add_rel_dist(("eqq_dist", i), qq_max_dist)
+        # add_rel_dist('qq_dist', qq_max_dist)
 
-        add_relation('qc_default')
+
+        for i in range(self.num_utterance_keep):
+            add_relation(("qc_default", i))
+        # add_relation('qc_default')
         # if qc_token_match:
         #    add_relation('qc_token_match')
 
-        add_relation('qt_default')
+        for i in range(self.num_utterance_keep):
+            add_relation(("qt_default", i))
+        # add_relation('qt_default')
         # if qt_token_match:
         #    add_relation('qt_token_match')
 
-        add_relation('cq_default')
+        for i in range(self.num_utterance_keep):
+            add_relation(("cq_default", i))
+        # add_relation('cq_default')
         # if cq_token_match:
         #    add_relation('cq_token_match')
+
+        for i in range(self.num_utterance_keep):
+            add_relation(("tq_default", i))
+        # add_relation('tq_default')
+        # if cq_token_match:
+        #    add_relation('tq_token_match')
 
         add_relation('cc_default')
         if cc_foreign_key:
@@ -366,10 +388,6 @@ class RelationalTransformerUpdate(torch.nn.Module):
             add_relation('ct_primary_key')
             add_relation('ct_table_match')
             add_relation('ct_any_table')
-
-        add_relation('tq_default')
-        # if cq_token_match:
-        #    add_relation('tq_token_match')
 
         add_relation('tc_default')
         if tc_table_match:
@@ -389,24 +407,26 @@ class RelationalTransformerUpdate(torch.nn.Module):
         # schema linking relations
         # forward_backward
         if sc_link:
-            add_relation('qcCEM')
-            add_relation('cqCEM')
-            add_relation('qtTEM')
-            add_relation('tqTEM')
-            add_relation('qcCPM')
-            add_relation('cqCPM')
-            add_relation('qtTPM')
-            add_relation('tqTPM')
+            for i in range(self.num_utterance_keep):
+                add_relation(('qcCEM', i))
+                add_relation(('cqCEM', i))
+                add_relation(('qtTEM', i))
+                add_relation(('tqTEM', i))
+                add_relation(('qcCPM', i))
+                add_relation(('cqCPM', i))
+                add_relation(('qtTPM', i))
+                add_relation(('tqTPM', i))
 
         if cv_link:
-            add_relation("qcNUMBER")
-            add_relation("cqNUMBER")
-            add_relation("qcTIME")
-            add_relation("cqTIME")
-            add_relation("qcCELLMATCH")
-            add_relation("cqCELLMATCH")
+            for i in range(self.num_utterance_keep):
+                add_relation(("qcNUMBER", i))
+                add_relation(("cqNUMBER", i))
+                add_relation(("qcTIME", i))
+                add_relation(("cqTIME", i))
+                add_relation(("qcCELLMATCH", i))
+                add_relation(("cqCELLMATCH", i))
 
-        if merge_types:
+        if merge_types:                             #这个一定要设为false
             assert not cc_foreign_key
             assert not cc_table_match
             assert not ct_foreign_key
@@ -483,7 +503,7 @@ class RelationalTransformerUpdate(torch.nn.Module):
         mask = torch.cat([mask_1, mask_2], 0)
         return mask
 
-    def forward_unbatched(self, desc, q_enc, c_enc, c_boundaries, t_enc, t_boundaries):
+    def forward_unbatched(self, desc, q_enc, embedding_index, c_enc, c_boundaries, t_enc, t_boundaries):
         # enc shape: total len x batch (=1) x recurrent size
         enc = torch.cat((q_enc, c_enc, t_enc), dim=0) #length + col_num + table_num, 1, 768
 
@@ -496,6 +516,7 @@ class RelationalTransformerUpdate(torch.nn.Module):
             enc_length=enc.shape[1],
             q_enc_length=q_enc.shape[0],
             c_enc_length=c_enc.shape[0],
+            embedding_index=embedding_index,
             c_boundaries=c_boundaries,
             t_boundaries=t_boundaries)
 
@@ -568,21 +589,20 @@ class RelationalTransformerUpdate(torch.nn.Module):
             gather_from_indices=gather_from_enc_new)
         return q_enc_new, c_enc_new, t_enc_new
 
-    def compute_relations(self, desc, enc_length, q_enc_length, c_enc_length, c_boundaries, t_boundaries):
+    def compute_relations(self, desc, enc_length, q_enc_length, c_enc_length, embedding_index, c_boundaries, t_boundaries):
         #desc,
         #enc_length = enc.shape[1],       question length + column_length + table_length
         #q_enc_length = q_enc.shape[0],   question length
         #c_enc_length = c_enc.shape[0],   column_length
         #c_boundaries = c_boundaries,
         #t_boundaries = t_boundaries)
-
         sc_link = desc.get('sc_link', {'q_col_match': {}, 'q_tab_match': {}})  #没有的话则为空
         cv_link = desc.get('cv_link', {'num_date_match': {}, 'cell_match': {}})  #没有的话则为空
 
         # Catalogue which things are where
         loc_types = {}
         for i in range(q_enc_length):
-            loc_types[i] = ('question',)
+            loc_types[i] = ('question', embedding_index[i])
 
         c_base = q_enc_length
         for c_id, (c_start, c_end) in enumerate(zip(c_boundaries, c_boundaries[1:])):
@@ -604,42 +624,51 @@ class RelationalTransformerUpdate(torch.nn.Module):
             def set_relation(name):
                 relations[i, j] = self.relation_ids[name]
 
+            # if i != j:
+            #     add_relation(("dqq_dict", i, j))
+            # else:
+            #     add_relation(("eqq_dict", i, qq_max_dist))
+
+
             i_type, j_type = loc_types[i], loc_types[j]
             if i_type[0] == 'question':                 #当第一个节点为question
                 if j_type[0] == 'question':             #第二节点也为question
-                    set_relation(('qq_dist', clamp(j - i, self.qq_max_dist)))  # 邻接矩阵两个点设置值，qq_dist在-2,2之间，并取relation_ids中改边的index
+                    if i_type[1] == j_type[1]:
+                        set_relation(('eqq_dist', i_type[1], clamp(j - i, self.qq_max_dist)))  # 邻接矩阵两个点设置值，qq_dist在-2,2之间，并取relation_ids中改边的index
+                    else:
+                        set_relation(("dqq_dist", i_type[1], j_type[1]))
                 elif j_type[0] == 'column':             #第二节点为column
                     # set_relation('qc_default')
                     j_real = j - c_base
 #f-string在功能方面不逊于传统的%-formatting语句和str.format()函数，同时性能又优于二者，且使用起来也更加简洁明了，需要py>3.6
                     if f"{i},{j_real}" in sc_link["q_col_match"]:
-                        set_relation("qc" + sc_link["q_col_match"][f"{i},{j_real}"])
+                        set_relation(("qc" + sc_link["q_col_match"][f"{i},{j_real}"], i_type[1]))
                     elif f"{i},{j_real}" in cv_link["cell_match"]:
-                        set_relation("qc" + cv_link["cell_match"][f"{i},{j_real}"])
+                        set_relation(("qc" + cv_link["cell_match"][f"{i},{j_real}"], i_type[1]))
                     elif f"{i},{j_real}" in cv_link["num_date_match"]:
-                        set_relation("qc" + cv_link["num_date_match"][f"{i},{j_real}"])
+                        set_relation(("qc" + cv_link["num_date_match"][f"{i},{j_real}"], i_type[1]))
                     else:
-                        set_relation('qc_default')
+                        set_relation(('qc_default', i_type[1]))
                 elif j_type[0] == 'table':
                     # set_relation('qt_default')
                     j_real = j - t_base
                     if f"{i},{j_real}" in sc_link["q_tab_match"]:
-                        set_relation("qt" + sc_link["q_tab_match"][f"{i},{j_real}"])
+                        set_relation(("qt" + sc_link["q_tab_match"][f"{i},{j_real}"], i_type[1]))
                     else:
-                        set_relation('qt_default')
+                        set_relation(('qt_default', i_type[1]))
 
             elif i_type[0] == 'column':
                 if j_type[0] == 'question':
                     # set_relation('cq_default')
                     i_real = i - c_base
                     if f"{j},{i_real}" in sc_link["q_col_match"]:
-                        set_relation("cq" + sc_link["q_col_match"][f"{j},{i_real}"])
+                        set_relation(("cq" + sc_link["q_col_match"][f"{j},{i_real}"], j_type[1]))
                     elif f"{j},{i_real}" in cv_link["cell_match"]:
-                        set_relation("cq" + cv_link["cell_match"][f"{j},{i_real}"])
+                        set_relation(("cq" + cv_link["cell_match"][f"{j},{i_real}"], j_type[1]))
                     elif f"{j},{i_real}" in cv_link["num_date_match"]:
-                        set_relation("cq" + cv_link["num_date_match"][f"{j},{i_real}"])
+                        set_relation(("cq" + cv_link["num_date_match"][f"{j},{i_real}"], j_type[1]))
                     else:
-                        set_relation('cq_default')
+                        set_relation(('cq_default', j_type[1]))
                 elif j_type[0] == 'column':
                     col1, col2 = i_type[1], j_type[1]
                     if col1 == col2:
@@ -654,7 +683,6 @@ class RelationalTransformerUpdate(torch.nn.Module):
                         if (self.cc_table_match and
                                 desc['column_to_table'][str(col1)] == desc['column_to_table'][str(col2)]):
                             set_relation('cc_table_match')
-
                 elif j_type[0] == 'table':
                     col, table = i_type[1], j_type[1]
                     set_relation('ct_default')
@@ -675,9 +703,9 @@ class RelationalTransformerUpdate(torch.nn.Module):
                     # set_relation('tq_default')
                     i_real = i - t_base
                     if f"{j},{i_real}" in sc_link["q_tab_match"]:
-                        set_relation("tq" + sc_link["q_tab_match"][f"{j},{i_real}"])
+                        set_relation(("tq" + sc_link["q_tab_match"][f"{j},{i_real}"], j_type[1]))
                     else:
-                        set_relation('tq_default')
+                        set_relation(('tq_default', j_type[1]))
                 elif j_type[0] == 'column':
                     table, col = i_type[1], j_type[1]
                     set_relation('tc_default')
@@ -753,13 +781,13 @@ class InputsquenceEmbedding(torch.nn.Module):
         #print(desc["question_boundary"])
         num_keep = min(desc["index"], self.num_utterance_keep)
         question_boundary = desc["question_boundary"][-(num_keep + 1)]
-        input_embeddings = []
+        embedding_index = []
         for index, boundary in enumerate(desc["question_boundary"][-num_keep:]):
             input_embedding = [num_keep - index - 1] * (boundary - question_boundary)
             question_boundary = boundary
-            input_embeddings.extend(input_embedding)
-        input_len = len(input_embeddings)
-        input_embeddings = torch.LongTensor(input_embeddings).to(self._device)
+            embedding_index.extend(input_embedding)
+        input_len = len(embedding_index)
+        input_embeddings = torch.LongTensor(embedding_index).to(self._device)
 
         position_embedding = self.embedding(input_embeddings)
         input_enc = input_enc[-input_len:]
@@ -769,7 +797,7 @@ class InputsquenceEmbedding(torch.nn.Module):
         embeddings = input_enc + position_embedding
         embeddings = self.LayerNorm(embeddings)
         embeddings = self.dropout(embeddings)
-        return embeddings
+        return embeddings, embedding_index
 
 
 

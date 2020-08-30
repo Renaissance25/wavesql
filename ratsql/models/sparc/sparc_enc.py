@@ -506,12 +506,13 @@ class SparcEncoderBert(torch.nn.Module):
         assert col_enc.size()[0] == c_boundary[-1]
         assert tab_enc.size()[0] == t_boundary[-1]
 
-        input_enc = self.input_embedding(desc, torch.cat([pre_enc, q_enc], 0))
+        input_enc, embedding_index = self.input_embedding(desc, torch.cat([pre_enc, q_enc], 0))
 
         input_enc_new_item, c_enc_new_item, t_enc_new_item, align_mat_item = \
             self.encs_update.forward_unbatched(
                 desc,
                 input_enc.unsqueeze(1),
+                embedding_index,
                 col_enc.unsqueeze(1),
                 c_boundary,
                 tab_enc.unsqueeze(1),

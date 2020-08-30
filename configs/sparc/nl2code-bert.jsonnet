@@ -29,6 +29,7 @@ function(args) _base(output_from=_output_from, data_path=args.data_path) + {
                 num_heads: 8,
                 sc_link: args.sc_link,
                 cv_link: args.cv_link,
+                num_utterance_keep: 4,
             },
             summarize_header: args.summarize_header,
             encode_size: args.encode_size,
